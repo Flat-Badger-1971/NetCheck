@@ -24,8 +24,7 @@ public class AIEngine : IAIEngine
         IChatClient chatClient,
         IOllamaModelService ollamaService,
         ILogger<AIEngine> logger,
-        IList<AITool> toolDescriptors) //,
-        // IDictionary<string, IMcpInvokableTool> _)
+        IList<AITool> toolDescriptors)
     {
         _chatClient = chatClient;
         _ollamaService = ollamaService;
