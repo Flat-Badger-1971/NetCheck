@@ -1,22 +1,26 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.AI;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using NetCheck.Services;
 
-namespace NetCheck.Controllers
-{
-    [ApiController]
-    [Route("[controller]")]
-    public class TradingController(ILogger<TradingController> logger, IAIEngine engine) : ControllerBase
-    {
-        [HttpGet(Name = "Test")]
-        public async Task<IActionResult> Get()
-        {
-            IList<ChatMessage> result = await engine.Test();
+namespace NetCheck.Controllers;
 
-            return Ok(result);
+[ApiController]
+[Route("[controller]")]
+public class NetCheckController(IAIEngine engine) : ControllerBase
+{
+    // GET /NetCheck/{repo}
+    // Example: /NetCheck/owner/repository-name
+    [HttpGet("{*repo}")]
+    public async Task<IActionResult> Get(string repo, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(repo))
+        {
+            return BadRequest("Repository path or identifier is required.");
         }
+
+        string json = await engine.ScanRepositoryAsync(repo, cancellationToken);
+        return Content(json, "application/json");
     }
 }

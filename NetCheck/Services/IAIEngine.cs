@@ -1,11 +1,9 @@
-﻿using Microsoft.Extensions.AI;
-using System.Collections.Generic;
+﻿using System.Threading;
 using System.Threading.Tasks;
 
-namespace NetCheck.Services
+namespace NetCheck.Services;
+
+public interface IAIEngine
 {
-    public interface IAIEngine
-    {
-        Task<IList<ChatMessage>> Test();
-    }
+    public Task<string> ScanRepositoryAsync(string repository, CancellationToken cancellationToken = default);
 }
