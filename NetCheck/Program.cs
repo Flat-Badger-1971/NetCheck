@@ -1,9 +1,12 @@
 ﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using NetCheck.Extensions;
 using NetCheck.HostedServices;
 using NetCheck.Services;
+using NetCheck.Logging;
+using Microsoft.Extensions.Logging.Console; // added
 
 namespace NetCheck;
 
@@ -13,8 +16,15 @@ public static class Program
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
-        // Add services to the container.
+        // Configure logging to use minimal console formatter
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton<ConsoleFormatter, MinimalConsoleFormatter>();
+        builder.Logging.AddConsole(options =>
+        {
+            options.FormatterName = MinimalConsoleFormatter.FormatterName;
+        });
 
+        // Add services to the container.
         builder.Services.AddControllers();
         // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
         builder.Services.AddEndpointsApiExplorer();

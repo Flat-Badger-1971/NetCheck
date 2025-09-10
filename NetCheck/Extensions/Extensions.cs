@@ -19,13 +19,23 @@ namespace NetCheck.Extensions;
 
 public static class Extensions
 {
+    private sealed class McpToolBundle
+    {
+        public IList<AITool> Tools { get; }
+        public IReadOnlyDictionary<string, IMcpInvokableTool> Invokers { get; }
+        public McpToolBundle(IList<AITool> tools, IReadOnlyDictionary<string, IMcpInvokableTool> invokers)
+        {
+            Tools = tools;
+            Invokers = invokers;
+        }
+    }
+
     public static WebApplicationBuilder AddAIServices(this WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<IOllamaModelService, OllamaService>();
         AddMcpClient(builder);
         AddMcpTools(builder);
         AddUnifiedChatClient(builder);
-
         return builder;
     }
 
@@ -47,10 +57,7 @@ public static class Extensions
             }
 
             IChatClient raw = new OllamaApiClient(endpoint, model);
-
-            ChatClientBuilder chatBuilder =
-                raw
-                .AsBuilder()
+            ChatClientBuilder chatBuilder = raw.AsBuilder()
                 .UseFunctionInvocation()
                 .UseDistributedCache(new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions())))
                 .UseLogging(loggerFactory);
@@ -61,33 +68,30 @@ public static class Extensions
 
     private static void AddMcpTools(WebApplicationBuilder builder)
     {
-        builder.Services.AddSingleton<IList<AITool>>(sp =>
+        builder.Services.AddSingleton<McpToolBundle>(sp =>
         {
             ILogger logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("McpTools");
-            IMcpClient mcpClient = sp.GetService<IMcpClient>();
+            IMcpClient? mcpClient = sp.GetService<IMcpClient>();
             if (mcpClient is null)
             {
-                logger.LogInformation("No IMcpClient registered; returning empty tool list.");
-                return Array.Empty<AITool>().ToList();
+                logger.LogInformation("No IMcpClient registered; returning empty tool collections.");
+                return new McpToolBundle(Array.Empty<AITool>(), new Dictionary<string, IMcpInvokableTool>());
             }
-
             try
             {
-                (IList<AITool> tools, IDictionary<string, IMcpInvokableTool> invokers) tools = McpChatToolFactory
-                    .CreateAsync(mcpClient, CancellationToken.None)
-                    .GetAwaiter()
-                    .GetResult();
-
-                logger.LogInformation("Loaded {Count} MCP tools.", tools.tools.Count);
-
-                return tools.tools.ToList();
+                (IList<AITool> tools, IDictionary<string, IMcpInvokableTool> invokers) = McpChatToolFactory.CreateAsync(mcpClient, logger, CancellationToken.None).GetAwaiter().GetResult();
+                logger.LogInformation("Loaded {Count} MCP tools.", tools.Count);
+                return new McpToolBundle(tools, new Dictionary<string, IMcpInvokableTool>(invokers));
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to load MCP tools; returning empty list.");
-                return [];
+                logger.LogError(ex, "Failed to load MCP tools; returning empty collections.");
+                return new McpToolBundle(Array.Empty<AITool>(), new Dictionary<string, IMcpInvokableTool>());
             }
         });
+
+        builder.Services.AddSingleton<IList<AITool>>(sp => sp.GetRequiredService<McpToolBundle>().Tools);
+        builder.Services.AddSingleton<IReadOnlyDictionary<string, IMcpInvokableTool>>(sp => sp.GetRequiredService<McpToolBundle>().Invokers);
     }
 
     private static void AddMcpClient(WebApplicationBuilder builder)
@@ -102,14 +106,12 @@ public static class Extensions
         {
             ILogger logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("McpInit");
             IConfiguration cfg = sp.GetRequiredService<IConfiguration>();
-
             string mcpUrl = cfg["AI:Mcp:Url"];
             string mcpToken = cfg["AI:Mcp:Token"];
 
             try
             {
                 IClientTransport transport;
-
                 if (!string.IsNullOrWhiteSpace(mcpUrl))
                 {
                     SseClientTransportOptions sse = new()
@@ -126,8 +128,7 @@ public static class Extensions
                 {
                     string mcpCommand = cfg["AI:Mcp:Command"] ?? "github-mcp-server";
                     string argsRaw = cfg["AI:Mcp:Arguments"] ?? string.Empty;
-                    string[] args = string.IsNullOrWhiteSpace(argsRaw) ? [] : argsRaw.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
+                    string[] args = string.IsNullOrWhiteSpace(argsRaw) ? Array.Empty<string>() : argsRaw.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                     StdioClientTransportOptions stdio = new()
                     {
                         Command = mcpCommand,
@@ -139,7 +140,6 @@ public static class Extensions
 
                 IMcpClient client = McpClientFactory.CreateAsync(transport).GetAwaiter().GetResult();
                 logger.LogInformation("MCP client connected.");
-
                 return client;
             }
             catch (Exception ex)
