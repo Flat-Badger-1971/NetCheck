@@ -1,32 +1,22 @@
 ﻿using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
+using SharpToken;
 
 namespace NetCheck.Utility;
 
 public static class TokenEstimator
 {
+    private static readonly GptEncoding _encoding = GptEncoding.GetEncoding("llama-3");
 
     public static int EstimateTokens(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return 0;
-
-        // Split on whitespace and punctuation
-        string[] tokens = Regex.Split(text, @"[\s]+|(?=\p{P})|(?<=\p{P})");
-
-        // Filter out empty tokens
-        List<string> filtered = new List<string>();
-
-        foreach (string token in tokens)
         {
-            if (!string.IsNullOrWhiteSpace(token))
-            {
-                filtered.Add(token);
-            }
+            return 0;
         }
 
-        return filtered.Count;
+        // Use SharpToken for accurate Llama3 tokenization
+        return _encoding.Encode(text).Count;
     }
 
     // Estimate tokens for a conversation history
@@ -41,6 +31,7 @@ public static class TokenEstimator
             // Add content tokens
             total += EstimateTokens(message.Text);
         }
+
         return total;
     }
 }

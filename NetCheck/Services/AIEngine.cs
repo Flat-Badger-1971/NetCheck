@@ -50,7 +50,7 @@ public class AIEngine : IAIEngine
         conversation.Add(new(ChatRole.System, GetSystemPrompt()));
 
         IList<McpClientTool> tools = await _mcpClient.ListToolsAsync(null, default);
-        ChatOptions chatOptions = new() { Tools = [.. tools], AllowMultipleToolCalls=true, ToolMode = ChatToolMode.RequireAny };
+        ChatOptions chatOptions = new() { Tools = [.. tools], AllowMultipleToolCalls = false, ToolMode = ChatToolMode.RequireAny };
         chatOptions.AddOllamaOption(OllamaOption.NumCtx, 8192);
 
         Console.WriteLine("Available tools:");
@@ -65,6 +65,7 @@ public class AIEngine : IAIEngine
         while (true)
         {
             Console.Write("Prompt: ");
+            Console.Out.Flush();
 
             string inputText = Console.ReadLine();
 
@@ -76,16 +77,52 @@ public class AIEngine : IAIEngine
             conversation.Add(new(ChatRole.User, inputText));
 
             List<ChatResponseUpdate> updates = [];
+            StringBuilder assistantTextBuilder = new StringBuilder();
 
-            await foreach (ChatResponseUpdate update in _chatClient.GetStreamingResponseAsync(conversation, chatOptions))
+            _logger.LogDebug("Starting streaming response for prompt: {Prompt}", inputText);
+            int updateCount = 0;
+            try
             {
-                Console.Write(update);
-                updates.Add(update);
+                await foreach (ChatResponseUpdate update in _chatClient.GetStreamingResponseAsync(conversation, chatOptions))
+                {
+                    updateCount++;
+
+                    Console.Write(update);
+                    updates.Add(update);
+                    string delta = update.Text;
+                    if (!string.IsNullOrEmpty(delta))
+                    {
+                        assistantTextBuilder.Append(delta);
+                    }
+                }
+                _logger.LogDebug("Streaming response completed. Total updates: {UpdateCount}", updateCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception during streaming response loop");
+                throw;
             }
 
+            string assistantText = assistantTextBuilder.ToString();
+            _logger.LogDebug("Assembled assistant text: '{AssistantText}'", assistantText);
+
+            if (!string.IsNullOrWhiteSpace(assistantText))
+            {
+                conversation.Add(new ChatMessage(ChatRole.Assistant, assistantText));
+                _logger.LogDebug("Assistant message added to conversation. Conversation count: {Count}", conversation.Count);
+            }
+            else
+            {
+                _logger.LogWarning("No assistant text assembled for this turn.");
+            }
+
+            int tokenEstimate = TokenEstimator.EstimateConversationTokens(conversation);
+            _logger.LogDebug("Token estimate after turn: {TokenEstimate}", tokenEstimate);
             Console.WriteLine();
-            Console.WriteLine($"Tokens used estimate: {TokenEstimator.EstimateConversationTokens(conversation)}");
-            conversation.AddMessages(updates);
+            Console.WriteLine($"Tokens used estimate: {tokenEstimate}");
+            Console.WriteLine();
+            Console.WriteLine("Ready for next prompt.");
+            Console.Out.Flush();
         }
     }
 

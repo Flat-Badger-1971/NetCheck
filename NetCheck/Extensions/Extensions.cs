@@ -110,7 +110,7 @@ public static class Extensions
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to initialize MCP client.");
+                logger.LogError(ex, "Failed to initialise MCP client.");
                 throw;
             }
         });
