@@ -10,6 +10,9 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
+using NetCheck.Utility;
+using OllamaSharp;
+using OllamaSharp.Models;
 using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace NetCheck.Services;
@@ -47,7 +50,8 @@ public class AIEngine : IAIEngine
         conversation.Add(new(ChatRole.System, GetSystemPrompt()));
 
         IList<McpClientTool> tools = await _mcpClient.ListToolsAsync(null, default);
-        ChatOptions chatOptions = new() { Tools = [.. tools] };
+        ChatOptions chatOptions = new() { Tools = [.. tools], AllowMultipleToolCalls=true, ToolMode = ChatToolMode.RequireAny };
+        chatOptions.AddOllamaOption(OllamaOption.NumCtx, 8192);
 
         Console.WriteLine("Available tools:");
 
@@ -80,6 +84,7 @@ public class AIEngine : IAIEngine
             }
 
             Console.WriteLine();
+            Console.WriteLine($"Tokens used estimate: {TokenEstimator.EstimateConversationTokens(conversation)}");
             conversation.AddMessages(updates);
         }
     }
