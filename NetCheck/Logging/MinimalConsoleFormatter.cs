@@ -10,7 +10,7 @@ public sealed class MinimalConsoleFormatter : ConsoleFormatter
 {
     public const string FormatterName = "minimal";
 
-    // Basic ANSI color codes (avoid complicated 256-color for portability)
+    // Basic ANSI colour codes (avoid complicated 256-colour for portability)
     private const string Reset = "\u001b[0m";
     private const string Dim = "\u001b[2m";
     private const string Gray = "\u001b[90m";
@@ -20,12 +20,12 @@ public sealed class MinimalConsoleFormatter : ConsoleFormatter
     private const string BrightRed = "\u001b[91m";
     private const string Cyan = "\u001b[36m";
 
-    private readonly bool _enableColor;
+    private readonly bool _enableColour;
 
     public MinimalConsoleFormatter() : base(FormatterName)
     {
         // Respect NO_COLOR environment convention to disable colors
-        _enableColor = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
+        _enableColour = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
     }
 
     public override void Write<TState>(
@@ -33,7 +33,8 @@ public sealed class MinimalConsoleFormatter : ConsoleFormatter
         IExternalScopeProvider scopeProvider,
         TextWriter textWriter)
     {
-        string? message = logEntry.Formatter?.Invoke(logEntry.State, logEntry.Exception);
+        string message = logEntry.Formatter?.Invoke(logEntry.State, logEntry.Exception);
+
         if (string.IsNullOrEmpty(message))
         {
             return;
@@ -46,10 +47,10 @@ public sealed class MinimalConsoleFormatter : ConsoleFormatter
         }
 
         string levelToken = GetLevelToken(logEntry.LogLevel);
-        string coloredPrefix = _enableColor ? Colorize(logEntry.LogLevel, levelToken) : levelToken;
+        string colouredPrefix = _enableColour ? Colourise(logEntry.LogLevel, levelToken) : levelToken;
 
         // Single-line output: "<level>: <message>"
-        textWriter.Write(coloredPrefix);
+        textWriter.Write(colouredPrefix);
         textWriter.Write(": ");
         textWriter.WriteLine(message);
     }
@@ -66,7 +67,7 @@ public sealed class MinimalConsoleFormatter : ConsoleFormatter
             _ => level.ToString().ToLowerInvariant()
         };
 
-    private static string GetAnsiColor(LogLevel level) =>
+    private static string GetAnsiColour(LogLevel level) =>
         level switch
         {
             LogLevel.Trace => Dim + Gray,
@@ -78,9 +79,9 @@ public sealed class MinimalConsoleFormatter : ConsoleFormatter
             _ => Cyan
         };
 
-    private static string Colorize(LogLevel level, string text)
+    private static string Colourise(LogLevel level, string text)
     {
-        string color = GetAnsiColor(level);
-        return $"{color}{text}{Reset}";
+        string colour = GetAnsiColour(level);
+        return $"{colour}{text}{Reset}";
     }
 }

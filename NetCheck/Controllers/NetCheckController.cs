@@ -1,7 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using System.Threading;
+﻿using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
 using NetCheck.Services;
 
 namespace NetCheck.Controllers;
@@ -22,5 +21,11 @@ public class NetCheckController(IAIEngine engine) : ControllerBase
 
         string json = await engine.ScanRepositoryAsync(repo, cancellationToken);
         return Content(json, "application/json");
+    }
+
+    [HttpGet("interactive")]
+    public async Task Get()
+    {
+        engine.Interactive();
     }
 }

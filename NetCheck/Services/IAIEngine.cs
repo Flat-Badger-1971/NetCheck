@@ -6,4 +6,5 @@ namespace NetCheck.Services;
 public interface IAIEngine
 {
     public Task<string> ScanRepositoryAsync(string repository, CancellationToken cancellationToken = default);
+    public Task Interactive();
 }

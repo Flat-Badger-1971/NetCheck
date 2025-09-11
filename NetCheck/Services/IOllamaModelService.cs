@@ -1,11 +1,10 @@
 ﻿using System.Threading.Tasks;
 
-namespace NetCheck.Services
+namespace NetCheck.Services;
+
+public interface IOllamaModelService
 {
-    public interface IOllamaModelService
-    {
-        Task<bool> EnsureModelIsLoadedAsync();
-        Task<bool> IsModelAvailableAsync();
-        Task<bool> PullModelAsync();
-    }
+    Task<bool> EnsureModelIsLoadedAsync();
+    Task<bool> IsModelAvailableAsync();
+    Task<bool> PullModelAsync();
 }
