@@ -26,11 +26,12 @@ public class AIEngine(
 
         List<McpClientTool> mcpTools = (await mcpClient.ListToolsAsync(null, default)).ToList();
 
-        // ollama seems to have a low limit of the number of tools it can handle
+        // ollama only - ollama seems to have a low limit of the number of tools it can handle
         mcpTools = mcpTools
             .Where(t => t.Name == "list_branches" || t.Name == "get_file_contents" || t.Name == "search_code")
             .ToList();
 
+        // you can add your own local tools here if you want
         List<AIFunction> localTools = ParseTools.GetLocalTools();
 
         ChatOptions chatOptions = new()

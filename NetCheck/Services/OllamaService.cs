@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 
 namespace NetCheck.Services;
 
+// this is only needed to ensure ollama has the required model downloaded and ready, otherwise nothing works
 public class OllamaService : IOllamaModelService
 {
     private readonly string _modelName;

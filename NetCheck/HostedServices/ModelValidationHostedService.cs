@@ -8,6 +8,7 @@ using NetCheck.Services;
 
 namespace NetCheck.HostedServices;
 
+// this is only needed to ensure ollama has the required model downloaded and ready, otherwise nothing works
 public class ModelValidationHostedService(IServiceProvider serviceProvider, ILogger<ModelValidationHostedService> logger) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Console;
 
 namespace NetCheck.Logging;
 
+// just a colourfull debug logger
 public sealed class MinimalConsoleFormatter : ConsoleFormatter
 {
     public const string FormatterName = "minimal";
