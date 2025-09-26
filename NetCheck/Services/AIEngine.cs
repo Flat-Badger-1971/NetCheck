@@ -3,211 +3,82 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
+using NetCheck.Tools;
+using NetCheck.Utility;
 using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace NetCheck.Services;
 
-public class AIEngine : IAIEngine
+public class AIEngine(
+    IChatClient chatClient,
+    IMcpClient mcpClient,
+    ILogger<AIEngine> logger) : IAIEngine
 {
-    private readonly IChatClient _chatClient;
-    private readonly IOllamaModelService _ollamaService;
-    private readonly ILogger<AIEngine> _logger;
-    private readonly IMcpClient _mcpClient;
-    private readonly List<ChatMessage> _systemMessages;
-    private static readonly Regex s_jsonObjectRegex = new(@"\{(?:[^{}""']|""(?:\\.|[^""])*""|'(?:\\.|[^'])*')*?\}", RegexOptions.Singleline | RegexOptions.Compiled);
-
-    public AIEngine(
-        IChatClient chatClient,
-        IMcpClient mcpClient,
-        IOllamaModelService ollamaService,
-        ILogger<AIEngine> logger)
-    {
-        _chatClient = chatClient;
-        _ollamaService = ollamaService;
-        _logger = logger;
-        _mcpClient = mcpClient;
-
-        _systemMessages =
-        [
-            new ChatMessage(ChatRole.System, GetSystemPrompt())
-        ];
-    }
-
-    public async Task Interactive()
+    public async Task<string> RunAgent()
     {
         List<ChatMessage> conversation = [];
 
         conversation.Add(new(ChatRole.System, GetSystemPrompt()));
 
-        IList<McpClientTool> tools = await _mcpClient.ListToolsAsync(null, default);
-        ChatOptions chatOptions = new() { Tools = [.. tools] };
+        List<McpClientTool> mcpTools = (await mcpClient.ListToolsAsync(null, default)).ToList();
 
-        Console.WriteLine("Available tools:");
+        // ollama seems to have a low limit of the number of tools it can handle
+        mcpTools = mcpTools
+            .Where(t => t.Name == "list_branches" || t.Name == "get_file_contents" || t.Name == "search_code")
+            .ToList();
 
-        foreach (McpClientTool tool in tools)
+        List<AIFunction> localTools = ParseTools.GetLocalTools();
+
+        ChatOptions chatOptions = new()
         {
-            Console.WriteLine($"{tool.Name}: {tool.Description}");
+            Tools = [.. mcpTools, .. localTools],
+            AllowMultipleToolCalls = true,
+            ToolMode = ChatToolMode.RequireAny
+        };
+
+        Console.WriteLine("Available tools (MCP + local):");
+
+        foreach (AITool tool in chatOptions.Tools)
+        {
+            Console.WriteLine($"{tool.Name} - {tool.Description}");
         }
+
+        StringBuilder userPrompt = new StringBuilder();
+
+        userPrompt.AppendLine("Give me the branch names for this github repository:");
+        // this is my personal repo for testing to avoid permissions issues with private repos
+        userPrompt.AppendLine($"TARGET REPOSITORY: NetCheck");
+        userPrompt.AppendLine($"TARGET OWNER: Flat-Badger-1971");
+        userPrompt.AppendLine("The response must only contain a JSON formatted array of branch names and NO other text.");
+        userPrompt.AppendLine("For example [\"main\", \"dev\", \"feature-xyz\"]");
+
+        conversation.Add(new ChatMessage(ChatRole.User, userPrompt.ToString()));
 
         Console.WriteLine();
 
-        while (true)
+        StringBuilder updates = new StringBuilder();
+
+        logger.LogDebug("Starting streaming response");
+
+        await foreach (ChatResponseUpdate update in chatClient.GetStreamingResponseAsync(conversation, chatOptions))
         {
-            Console.Write("Prompt: ");
-
-            string inputText = Console.ReadLine();
-
-            if (inputText.Equals("exit", StringComparison.InvariantCultureIgnoreCase))
-            {
-                break;
-            }
-
-            conversation.Add(new(ChatRole.User, inputText));
-
-            List<ChatResponseUpdate> updates = [];
-
-            await foreach (ChatResponseUpdate update in _chatClient.GetStreamingResponseAsync(conversation, chatOptions))
-            {
-                Console.Write(update);
-                updates.Add(update);
-            }
-
-            Console.WriteLine();
-            conversation.AddMessages(updates);
-        }
-    }
-
-    public async Task<string> ScanRepositoryAsync(string repository, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(repository))
-        {
-            throw new ArgumentException("Repository identifier is required.", nameof(repository));
+            Console.Write(update);
+            updates.Append(update.Text);
         }
 
-        if (!await _ollamaService.IsModelAvailableAsync() &&
-            !await _ollamaService.EnsureModelIsLoadedAsync())
-        {
-            _logger.LogError("Model unavailable for repository scan.");
-            throw new InvalidOperationException("Model not available.");
-        }
+        logger.LogDebug("\nCompleted streaming response");
 
-        string repoNormalised = Uri.UnescapeDataString(repository);
-        IList<McpClientTool> tools = await _mcpClient.ListToolsAsync(null, cancellationToken);
+        conversation.Add(new ChatMessage(ChatRole.Assistant, updates.ToString()));
 
-        string message = $"Discovered {tools.Count} MCP tools";
-        _logger.LogInformation(message);
+        int tokenestimate = await TokenEstimator.EstimateLlamaConversationTokens(conversation);
 
-        string toolList = string.Join('\n', tools.Select(t => $"- {t.Name}: {t.Description}"));
-        StringBuilder userPrompt = new StringBuilder();
+        updates.AppendLine($"\n\nEstimated tokens used: {tokenestimate}");
 
-        userPrompt.AppendLine($"TARGET REPOSITORY: {repoNormalised}");
-        userPrompt.AppendLine("You MUST discover .NET versions ONLY by invoking the available tools. NO GUESSING. NO PROSE.");
-        userPrompt.AppendLine("AVAILABLE TOOLS:");
-        userPrompt.AppendLine(toolList);
-        userPrompt.AppendLine("PROTOCOL (STRICT - one JSON object per turn, nothing else):");
-        userPrompt.AppendLine("Tool call example:");
-        userPrompt.AppendLine("{\"action\":\"call_tool\",\"tool\":\"<toolName>\",\"arguments\":{ },\"reason\":\"why this tool is needed\"}");
-        userPrompt.AppendLine("Final result signal example:");
-        userPrompt.AppendLine("{\"action\":\"final_result\"}");
-        userPrompt.AppendLine("You MUST read (if they exist): global.json, every *.csproj, Directory.Build.props / .targets, Dockerfile*, *.yml / *.yaml.");
-        userPrompt.AppendLine("DO NOT produce the final schema JSON. Only signal final_result first; I will then give you all evidence to produce the JSON in a second pass.");
-        userPrompt.AppendLine("RULES:");
-        userPrompt.AppendLine("- No markdown");
-        userPrompt.AppendLine("- No explanations outside JSON");
-        userPrompt.AppendLine("- Always include 'action'");
-        userPrompt.AppendLine("- Use 'arguments': {} if none");
-        userPrompt.AppendLine("Start by listing the repository root with an appropriate tool call. Then use any other tool calls as necessary.");
-
-        List<ChatMessage> conversation = new(_systemMessages)
-        {
-            new ChatMessage(ChatRole.User, userPrompt.ToString())
-        };
-
-        ChatOptions options = new() { Tools = [.. tools] };
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        ChatResponse response = await _chatClient.GetResponseAsync(conversation, options, cancellationToken);
-
-        _logger.LogInformation(response.Messages.ToString());
-
-        string assistant = ExtractAssistantText(response);
-        string planJson = ExtractSingleJsonObject(assistant);
-
-        return planJson;
-    }
-
-    private static object JsonToPlain(JsonElement el) =>
-        el.ValueKind switch
-        {
-            JsonValueKind.Object => el.EnumerateObject().ToDictionary(p => p.Name, p => JsonToPlain(p.Value), StringComparer.OrdinalIgnoreCase),
-            JsonValueKind.Array => el.EnumerateArray().Select(JsonToPlain).ToList(),
-            JsonValueKind.String => el.GetString(),
-            JsonValueKind.Number => el.TryGetInt64(out long l) ? l : el.GetDouble(),
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Null or JsonValueKind.Undefined => null,
-            _ => el.ToString()
-        };
-
-    private static string ExtractSingleJsonObject(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        foreach (Match m in s_jsonObjectRegex.Matches(raw))
-        {
-            string candidate = m.Value.Trim();
-
-            if (IsValidJson(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool IsValidJson(string candidate)
-    {
-        try
-        {
-            using (JsonDocument _ = JsonDocument.Parse(candidate))
-            {
-                return true;
-            }
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string ExtractAssistantText(ChatResponse response)
-    {
-        if (response.Messages != null && response.Messages.Count > 0)
-        {
-            for (int i = response.Messages.Count - 1; i >= 0; i--)
-            {
-                ChatMessage msg = response.Messages[i];
-
-                if (msg.Role == ChatRole.Assistant && !string.IsNullOrWhiteSpace(msg.Text))
-                {
-                    return msg.Text;
-                }
-            }
-        }
-
-        return response.Text ?? string.Empty;
+        return updates.ToString();
     }
 
     private string GetSystemPrompt()
@@ -221,11 +92,11 @@ public class AIEngine : IAIEngine
                 return File.ReadAllText(path);
             }
 
-            _logger.LogWarning("System prompt file not found at {Path}. Using fallback.", path);
+            logger.LogWarning("System prompt file not found at {Path}. Using fallback.", path);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to load system prompt.");
+            logger.LogError(ex, "Failed to load system prompt.");
         }
 
         return "You are an AI agent.";

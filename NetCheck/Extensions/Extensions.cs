@@ -1,13 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using Azure;
+using Azure.AI.OpenAI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using NetCheck.Services;
 using OllamaSharp;
@@ -20,11 +19,12 @@ public static class Extensions
     {
         builder.Services.AddSingleton<IOllamaModelService, OllamaService>();
         AddMcpClient(builder);
-        AddChatClient(builder);
+        // AddOpenAIChatClient(builder);
+        AddOllamaChatClient(builder);
         return builder;
     }
 
-    private static void AddChatClient(WebApplicationBuilder builder)
+    private static void AddOllamaChatClient(WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<IChatClient>(sp =>
         {
@@ -45,7 +45,37 @@ public static class Extensions
 
             ChatClientBuilder chatBuilder = ollamaChatClient.AsBuilder()
                 .UseFunctionInvocation()
-                .UseDistributedCache(new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions())))
+                .UseLogging(loggerFactory);
+
+            return chatBuilder.Build(sp);
+        });
+    }
+
+    private static void AddOpenAIChatClient(WebApplicationBuilder builder)
+    {
+        builder.Services.AddSingleton<IChatClient>(sp =>
+        {
+            ILoggerFactory loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            ILogger logger = loggerFactory.CreateLogger("ChatClientInit");
+            IConfiguration cfg = sp.GetRequiredService<IConfiguration>();
+
+            if (string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Url"]) ||
+                string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Key"]))
+            {
+                logger.LogError("OpenAI configuration is missing (AI:OpenAI:Url and AI:OpenAI:Key are required).");
+                throw new InvalidOperationException("OpenAI configuration is missing (AI:OpenAI:Url and AI:OpenAI:Key are required).");
+            }
+
+            Uri endpoint = new (cfg["AI:OpenAI:Url"]);
+            AzureKeyCredential chatKey = new (cfg["AI:OpenAI:Key"]);
+
+            AzureOpenAIClient azureClient = new AzureOpenAIClient(endpoint, chatKey);
+            IChatClient client = azureClient.GetChatClient(cfg["AI:OpenAI:Model"]).AsIChatClient();
+
+            ChatClientBuilder chatBuilder =
+                client
+                .AsBuilder()
+                .UseFunctionInvocation()
                 .UseLogging(loggerFactory);
 
             return chatBuilder.Build(sp);
@@ -110,7 +140,7 @@ public static class Extensions
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to initialize MCP client.");
+                logger.LogError(ex, "Failed to initialise MCP client.");
                 throw;
             }
         });
