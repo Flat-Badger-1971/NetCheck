@@ -1,17 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
+using Azure;
+using Azure.AI.OpenAI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
-using NetCheck.AI.Mcp;
 using NetCheck.Services;
 using OllamaSharp;
 
@@ -23,13 +19,12 @@ public static class Extensions
     {
         builder.Services.AddSingleton<IOllamaModelService, OllamaService>();
         AddMcpClient(builder);
-        AddMcpTools(builder);
-        AddUnifiedChatClient(builder);
-
+        // AddOpenAIChatClient(builder);
+        AddOllamaChatClient(builder);
         return builder;
     }
 
-    private static void AddUnifiedChatClient(WebApplicationBuilder builder)
+    private static void AddOllamaChatClient(WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<IChatClient>(sp =>
         {
@@ -46,47 +41,44 @@ public static class Extensions
                 logger.LogWarning("Model {Model} may not be available; continuing.", model);
             }
 
-            IChatClient raw = new OllamaApiClient(endpoint, model);
+            IChatClient ollamaChatClient = new OllamaApiClient(endpoint, model);
 
-            ChatClientBuilder chatBuilder =
-                raw
-                .AsBuilder()
+            ChatClientBuilder chatBuilder = ollamaChatClient.AsBuilder()
                 .UseFunctionInvocation()
-                .UseDistributedCache(new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions())))
                 .UseLogging(loggerFactory);
 
             return chatBuilder.Build(sp);
         });
     }
 
-    private static void AddMcpTools(WebApplicationBuilder builder)
+    private static void AddOpenAIChatClient(WebApplicationBuilder builder)
     {
-        builder.Services.AddSingleton<IList<AITool>>(sp =>
+        builder.Services.AddSingleton<IChatClient>(sp =>
         {
-            ILogger logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("McpTools");
-            IMcpClient mcpClient = sp.GetService<IMcpClient>();
-            if (mcpClient is null)
+            ILoggerFactory loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            ILogger logger = loggerFactory.CreateLogger("ChatClientInit");
+            IConfiguration cfg = sp.GetRequiredService<IConfiguration>();
+
+            if (string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Url"]) ||
+                string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Key"]))
             {
-                logger.LogInformation("No IMcpClient registered; returning empty tool list.");
-                return Array.Empty<AITool>().ToList();
+                logger.LogError("OpenAI configuration is missing (AI:OpenAI:Url and AI:OpenAI:Key are required).");
+                throw new InvalidOperationException("OpenAI configuration is missing (AI:OpenAI:Url and AI:OpenAI:Key are required).");
             }
 
-            try
-            {
-                (IList<AITool> tools, IDictionary<string, IMcpInvokableTool> invokers) tools = McpChatToolFactory
-                    .CreateAsync(mcpClient, CancellationToken.None)
-                    .GetAwaiter()
-                    .GetResult();
+            Uri endpoint = new (cfg["AI:OpenAI:Url"]);
+            AzureKeyCredential chatKey = new (cfg["AI:OpenAI:Key"]);
 
-                logger.LogInformation("Loaded {Count} MCP tools.", tools.tools.Count);
+            AzureOpenAIClient azureClient = new AzureOpenAIClient(endpoint, chatKey);
+            IChatClient client = azureClient.GetChatClient(cfg["AI:OpenAI:Model"]).AsIChatClient();
 
-                return tools.tools.ToList();
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to load MCP tools; returning empty list.");
-                return [];
-            }
+            ChatClientBuilder chatBuilder =
+                client
+                .AsBuilder()
+                .UseFunctionInvocation()
+                .UseLogging(loggerFactory);
+
+            return chatBuilder.Build(sp);
         });
     }
 
@@ -102,23 +94,26 @@ public static class Extensions
         {
             ILogger logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("McpInit");
             IConfiguration cfg = sp.GetRequiredService<IConfiguration>();
-
             string mcpUrl = cfg["AI:Mcp:Url"];
             string mcpToken = cfg["AI:Mcp:Token"];
 
             try
             {
                 IClientTransport transport;
+                Dictionary<string, string> headers = new Dictionary<string, string>
+                {
+                    { "Authorization", $"Bearer {mcpToken}" },
+                    { "X-MCP-Readonly", "true" }
+                };
 
                 if (!string.IsNullOrWhiteSpace(mcpUrl))
                 {
-                    SseClientTransportOptions sse = new()
+                    SseClientTransportOptions sse = new SseClientTransportOptions
                     {
                         Endpoint = new Uri(mcpUrl),
-                        AdditionalHeaders = !string.IsNullOrWhiteSpace(mcpToken)
-                            ? new Dictionary<string, string> { { "Authorization", $"Bearer {mcpToken}" } }
-                            : null
+                        AdditionalHeaders = !string.IsNullOrWhiteSpace(mcpToken) ? headers : null
                     };
+
                     logger.LogInformation("Using SSE transport for MCP endpoint {Endpoint}", mcpUrl);
                     transport = new SseClientTransport(sse);
                 }
@@ -128,11 +123,12 @@ public static class Extensions
                     string argsRaw = cfg["AI:Mcp:Arguments"] ?? string.Empty;
                     string[] args = string.IsNullOrWhiteSpace(argsRaw) ? [] : argsRaw.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-                    StdioClientTransportOptions stdio = new()
+                    StdioClientTransportOptions stdio = new StdioClientTransportOptions
                     {
                         Command = mcpCommand,
                         Arguments = args
                     };
+
                     logger.LogInformation("Using Stdio transport for MCP command {Command}", mcpCommand);
                     transport = new StdioClientTransport(stdio);
                 }
@@ -144,7 +140,7 @@ public static class Extensions
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to initialize MCP client.");
+                logger.LogError(ex, "Failed to initialise MCP client.");
                 throw;
             }
         });
