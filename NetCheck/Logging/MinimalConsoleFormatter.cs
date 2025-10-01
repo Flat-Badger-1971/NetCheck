@@ -83,6 +83,7 @@ public sealed class MinimalConsoleFormatter : ConsoleFormatter
     private static string Colourise(LogLevel level, string text)
     {
         string colour = GetAnsiColour(level);
+
         return $"{colour}{text}{Reset}";
     }
 }

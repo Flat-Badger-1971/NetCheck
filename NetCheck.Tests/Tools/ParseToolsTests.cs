@@ -1,4 +1,5 @@
-﻿using NetCheck.Tools;
+﻿using System;
+using NetCheck.Tools;
 using Xunit;
 
 namespace NetCheck.Tests.Tools;
@@ -24,6 +25,6 @@ public class ParseToolsTests
     [Fact]
     public void ParseJSON_Throws_OnInvalidJson()
     {
-        Assert.Throws<System.ArgumentException>(() => ParseTools.ParseJSON("{ invalid"));
+        Assert.Throws<ArgumentException>(() => ParseTools.ParseJSON("{ invalid"));
     }
 }

@@ -40,8 +40,8 @@ public static class TokenEstimator
             {
                 Tokenizer tokeniser = LlamaTokenizer.Create(remoteStream);
 
-        foreach (ChatMessage message in messages)
-        {
+                foreach (ChatMessage message in messages)
+                {
                     total += tokeniser.CountTokens(message.Role.ToString());
                     total += tokeniser.CountTokens(message.Text);
                 }

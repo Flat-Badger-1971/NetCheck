@@ -13,15 +13,19 @@ using OllamaSharp;
 
 namespace NetCheck.Extensions;
 
+// ignore warning about commented out code
 public static class Extensions
 {
+#pragma warning disable S125 // commented out code warning
     public static WebApplicationBuilder AddAIServices(this WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<IOllamaModelService, OllamaService>();
         AddMcpClient(builder);
-        AddOllamaChatClient(builder);
+        AddOllamaChatClient(builder); // if using Azure OpenAI use AddOpenAIChatClient(builder) instead;
+
         return builder;
     }
+#pragma warning restore S125
 
     private static void AddOllamaChatClient(WebApplicationBuilder builder)
     {
@@ -50,6 +54,7 @@ public static class Extensions
         });
     }
 
+#pragma warning disable S1144 // unused method warning
     private static void AddOpenAIChatClient(WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<IChatClient>(sp =>
@@ -58,8 +63,7 @@ public static class Extensions
             ILogger logger = loggerFactory.CreateLogger("ChatClientInit");
             IConfiguration cfg = sp.GetRequiredService<IConfiguration>();
 
-            if (string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Url"]) ||
-                string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Key"]))
+            if (string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Url"]) || string.IsNullOrWhiteSpace(cfg["AI:OpenAI:Key"]))
             {
                 logger.LogError("OpenAI configuration is missing (AI:OpenAI:Url and AI:OpenAI:Key are required).");
                 throw new InvalidOperationException("OpenAI configuration is missing (AI:OpenAI:Url and AI:OpenAI:Key are required).");
@@ -80,6 +84,7 @@ public static class Extensions
             return chatBuilder.Build(sp);
         });
     }
+#pragma warning restore S1144
 
     private static void AddMcpClient(WebApplicationBuilder builder)
     {
@@ -89,7 +94,7 @@ public static class Extensions
             return;
         }
 
-        builder.Services.AddSingleton<IMcpClient>(sp =>
+        builder.Services.AddSingleton<McpClient>(sp =>
         {
             ILogger logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("McpInit");
             IConfiguration cfg = sp.GetRequiredService<IConfiguration>();
@@ -98,6 +103,7 @@ public static class Extensions
 
             try
             {
+                // determine the transport type - http for urls or stdio for local commands
                 IClientTransport transport;
                 Dictionary<string, string> headers = new()
                 {
@@ -107,14 +113,14 @@ public static class Extensions
 
                 if (!string.IsNullOrWhiteSpace(mcpUrl))
                 {
-                    SseClientTransportOptions sse = new()
+                    HttpClientTransportOptions http = new()
                     {
                         Endpoint = new Uri(mcpUrl),
                         AdditionalHeaders = !string.IsNullOrWhiteSpace(mcpToken) ? headers : null
                     };
 
-                    logger.LogInformation("Using SSE transport for MCP endpoint {Endpoint}", mcpUrl);
-                    transport = new SseClientTransport(sse);
+                    logger.LogInformation("Using HTTP transport for MCP endpoint {Endpoint}", mcpUrl);
+                    transport = new HttpClientTransport(http);
                 }
                 else
                 {
@@ -132,7 +138,7 @@ public static class Extensions
                     transport = new StdioClientTransport(stdio);
                 }
 
-                IMcpClient client = McpClientFactory.CreateAsync(transport).GetAwaiter().GetResult();
+                McpClient client = McpClient.CreateAsync(transport).GetAwaiter().GetResult();
                 logger.LogInformation("MCP client connected.");
 
                 return client;

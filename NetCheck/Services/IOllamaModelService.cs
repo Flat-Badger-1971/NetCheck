@@ -4,7 +4,7 @@ namespace NetCheck.Services;
 
 public interface IOllamaModelService
 {
-    Task<bool> EnsureModelIsLoadedAsync();
-    Task<bool> IsModelAvailableAsync();
-    Task<bool> PullModelAsync();
+    public Task<bool> EnsureModelIsLoadedAsync();
+    public Task<bool> IsModelAvailableAsync();
+    public Task<bool> PullModelAsync();
 }

@@ -13,15 +13,15 @@ public class NetCheckControllerTests
     public async Task Get_ReturnsOk_WithEngineResult()
     {
         // Arrange
-        var engine = Substitute.For<IAIEngine>();
+        IAIEngine engine = Substitute.For<IAIEngine>();
         engine.RunAgent().Returns("result");
-        var controller = new NetCheckController(engine);
+        NetCheckController controller = new NetCheckController(engine);
 
         // Act
         IActionResult actionResult = await controller.Get();
 
         // Assert
-        var okResult = Assert.IsType<OkObjectResult>(actionResult);
+        OkObjectResult okResult = Assert.IsType<OkObjectResult>(actionResult);
         Assert.Equal("result", okResult.Value);
         await engine.Received(1).RunAgent();
     }
