@@ -14,30 +14,30 @@ namespace NetCheck.Tools
             List<AIFunction> tools =
             [
                 AIFunctionFactory.Create(ParseJSON, "parse_json", "Parses the content of a global.json file to return any sdk version found"),
-                AIFunctionFactory.Create(ParseXML, "parse_xml", "Parses the content of a project file to return any dotnet versions found"),
+           //     AIFunctionFactory.Create(ParseXML, "parse_xml", "Parses the content of a project file to return any dotnet versions found"),
             ];
 
             return tools;
         }
 
-        public static List<string> ParseXML(string fileContent)
-        {
-            List<string> targetFrameworks = [];
+        //public static List<string> ParseXML(string fileContent)
+        //{
+        //    List<string> targetFrameworks = [];
 
-            XDocument xml = XDocument.Parse(fileContent);
-            targetFrameworks.AddRange(xml.Descendants("TargetFramework").Where(element => !string.IsNullOrWhiteSpace(element.Value)).Select(element => element.Value.Trim()));
+        //    XDocument xml = XDocument.Parse(fileContent);
+        //    targetFrameworks.AddRange(xml.Descendants("TargetFramework").Where(element => !string.IsNullOrWhiteSpace(element.Value)).Select(element => element.Value.Trim()));
 
-            foreach (XElement element in xml.Descendants("TargetFrameworks")) // plural form
-            {
-                if (!string.IsNullOrWhiteSpace(element.Value))
-                {
-                    string[] frameworks = element.Value.Split(';');
-                    targetFrameworks.AddRange(frameworks.Where(fw => !string.IsNullOrWhiteSpace(fw)).Select(fw => fw.Trim()));
-                }
-            }
+        //    foreach (XElement element in xml.Descendants("TargetFrameworks")) // plural form
+        //    {
+        //        if (!string.IsNullOrWhiteSpace(element.Value))
+        //        {
+        //            string[] frameworks = element.Value.Split(';');
+        //            targetFrameworks.AddRange(frameworks.Where(fw => !string.IsNullOrWhiteSpace(fw)).Select(fw => fw.Trim()));
+        //        }
+        //    }
 
-            return targetFrameworks;
-        }
+        //    return targetFrameworks;
+        //}
 
         public static string ParseJSON(string globalJsonContent)
         {

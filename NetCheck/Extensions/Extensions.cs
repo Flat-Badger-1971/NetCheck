@@ -19,7 +19,6 @@ public static class Extensions
     {
         builder.Services.AddSingleton<IOllamaModelService, OllamaService>();
         AddMcpClient(builder);
-        // AddOpenAIChatClient(builder);
         AddOllamaChatClient(builder);
         return builder;
     }
@@ -66,8 +65,8 @@ public static class Extensions
                 throw new InvalidOperationException("OpenAI configuration is missing (AI:OpenAI:Url and AI:OpenAI:Key are required).");
             }
 
-            Uri endpoint = new (cfg["AI:OpenAI:Url"]);
-            AzureKeyCredential chatKey = new (cfg["AI:OpenAI:Key"]);
+            Uri endpoint = new(cfg["AI:OpenAI:Url"]);
+            AzureKeyCredential chatKey = new(cfg["AI:OpenAI:Key"]);
 
             AzureOpenAIClient azureClient = new AzureOpenAIClient(endpoint, chatKey);
             IChatClient client = azureClient.GetChatClient(cfg["AI:OpenAI:Model"]).AsIChatClient();
@@ -100,7 +99,7 @@ public static class Extensions
             try
             {
                 IClientTransport transport;
-                Dictionary<string, string> headers = new Dictionary<string, string>
+                Dictionary<string, string> headers = new()
                 {
                     { "Authorization", $"Bearer {mcpToken}" },
                     { "X-MCP-Readonly", "true" }
@@ -108,7 +107,7 @@ public static class Extensions
 
                 if (!string.IsNullOrWhiteSpace(mcpUrl))
                 {
-                    SseClientTransportOptions sse = new SseClientTransportOptions
+                    SseClientTransportOptions sse = new()
                     {
                         Endpoint = new Uri(mcpUrl),
                         AdditionalHeaders = !string.IsNullOrWhiteSpace(mcpToken) ? headers : null
@@ -123,7 +122,7 @@ public static class Extensions
                     string argsRaw = cfg["AI:Mcp:Arguments"] ?? string.Empty;
                     string[] args = string.IsNullOrWhiteSpace(argsRaw) ? [] : argsRaw.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-                    StdioClientTransportOptions stdio = new StdioClientTransportOptions
+                    StdioClientTransportOptions stdio = new()
                     {
                         Command = mcpCommand,
                         Arguments = args

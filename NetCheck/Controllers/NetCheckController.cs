@@ -12,7 +12,6 @@ public class NetCheckController(IAIEngine engine) : ControllerBase
     public async Task<IActionResult> Get()
     {
         string response = await engine.RunAgent();
-
         return Ok(response);
     }
 }
