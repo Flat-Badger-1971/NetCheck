@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Net.Http;
@@ -7,7 +7,8 @@ using System.Threading.Tasks;
 
 namespace NetCheck.Services;
 
-public class OllamaService : IOllamaModelService
+// this is only needed to ensure ollama has the required model downloaded and ready, otherwise nothing works
+public sealed class OllamaService : IOllamaModelService, IDisposable
 {
     private readonly string _modelName;
     private readonly string _endpoint;
@@ -34,23 +35,28 @@ public class OllamaService : IOllamaModelService
             if (await IsModelAvailableAsync())
             {
                 _logger.LogInformation("Model {ModelName} is already available", _modelName);
+
                 return true;
             }
 
             // If not available, try to pull it
             _logger.LogWarning("Model {ModelName} not found. Attempting to pull...", _modelName);
+
             if (await PullModelAsync())
             {
                 _logger.LogInformation("Model {ModelName} successfully pulled", _modelName);
+
                 return true;
             }
 
             _logger.LogError("Failed to ensure model {ModelName} is available", _modelName);
+
             return false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error ensuring model {ModelName} is loaded", _modelName);
+
             return false;
         }
     }
@@ -80,6 +86,7 @@ public class OllamaService : IOllamaModelService
                                  modelName.StartsWith(_modelName.Split(':')[0], StringComparison.OrdinalIgnoreCase)))
                             {
                                 _logger.LogDebug("Model {ModelName} found in available models", _modelName);
+
                                 return true;
                             }
                         }
@@ -117,6 +124,7 @@ public class OllamaService : IOllamaModelService
 
                 // Wait a bit and check if model is now available
                 await Task.Delay(5000); // Wait 5 seconds
+
                 return await IsModelAvailableAsync();
             }
             else
@@ -138,6 +146,7 @@ public class OllamaService : IOllamaModelService
 
     public void Dispose()
     {
+        GC.SuppressFinalize(this);
         _httpClient?.Dispose();
     }
 }
