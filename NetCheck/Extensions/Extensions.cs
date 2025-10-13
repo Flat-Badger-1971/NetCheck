@@ -108,7 +108,8 @@ public static class Extensions
                 Dictionary<string, string> headers = new()
                 {
                     { "Authorization", $"Bearer {mcpToken}" },
-                    { "X-MCP-Readonly", "true" }
+                    // this will automatically exclude any tools that require write access
+                    // { "X-MCP-Readonly", "true" }
                 };
 
                 if (!string.IsNullOrWhiteSpace(mcpUrl))

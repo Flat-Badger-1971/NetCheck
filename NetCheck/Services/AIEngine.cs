@@ -35,8 +35,9 @@ public class AIEngine(
         ];
 
         // this is here as ollama silently discards tools it can't accommodate due the number being supplied
-        IEnumerable<McpClientTool> mcpTools = (await mcpClient.ListToolsAsync(null, default))
-            .Where(t => t.Name is "search_pull_requests" or "update_pull_request");
+        // it's also good practice to allow as few tools as possible to reduce the chances of the wrong tool being used
+        IEnumerable<McpClientTool> mcpTools = (await mcpClient.ListToolsAsync())
+            .Where(t => t.Name is "search_pull_requests" or "create_issue");
 
         Console.WriteLine("Available tools (MCP + local):");
 
@@ -52,7 +53,7 @@ public class AIEngine(
         // List<AITool> localTools = ParseTools.GetLocalTools();
         // Tools = [.. mcpTools, .. localTools],
 #pragma warning restore S125
-        ChatOptions retrievalOptions = new()
+        ChatOptions allToolOptions = new()
         {
             Tools = [.. mcpTools],
             AllowMultipleToolCalls = false,
@@ -68,7 +69,7 @@ public class AIEngine(
         userPrompt.AppendLine("Do NOT call any tool more than once. Do not format or summarise.");
         conversation.Add(new ChatMessage(ChatRole.User, userPrompt.ToString()));
 
-        string retrievalText = await GetResponse(conversation, retrievalOptions);
+        string retrievalText = await GetResponse(conversation, allToolOptions);
         conversation.Add(new ChatMessage(ChatRole.Assistant, retrievalText));
 
         if (!retrievalText.Contains($"repo:{RepoOwner}/{RepoName}", StringComparison.OrdinalIgnoreCase))
@@ -93,7 +94,6 @@ public class AIEngine(
         userPrompt.AppendLine("3. If no pull requests, output <JSON>[]</JSON>.");
         userPrompt.AppendLine("4. No commentary / markdown / reasoning.");
         userPrompt.AppendLine("5. Do not output {}.");
-
         conversation.Add(new ChatMessage(ChatRole.User, userPrompt.ToString()));
 
         string pullRequestsJson = await GetTaggedJsonArrayAsync(conversation, formattingOptions, "pull request normalisation");
@@ -117,7 +117,6 @@ public class AIEngine(
         userPrompt.AppendLine("3. Keys exactly: PullRequestNumber, Check, Passed, Reason.");
         userPrompt.AppendLine("4. No commentary, no wrapping object, no {}.");
         userPrompt.AppendLine("5. Reason must be exactly: Title does not start with TB-<digits>.");
-
         conversation.Add(new ChatMessage(ChatRole.User, userPrompt.ToString()));
 
         string titleFailuresJson = await GetTaggedJsonArrayAsync(conversation, analysisOptions, "title validation");
@@ -136,7 +135,6 @@ public class AIEngine(
         userPrompt.AppendLine("2. Keys exactly: PullRequestNumber, Check, Passed, Reason.");
         userPrompt.AppendLine("3. Allowed reasons: \"No TB-<digits> ticket in Title\" OR \"Missing hyperlink containing ticket\".");
         userPrompt.AppendLine("4. No commentary, no wrapping object, no {}.");
-
         conversation.Add(new ChatMessage(ChatRole.User, userPrompt.ToString()));
 
         string bodyFailuresJson = await GetTaggedJsonArrayAsync(conversation, analysisOptions, "body hyperlink validation");
@@ -145,93 +143,170 @@ public class AIEngine(
         // Token estimation
         int tokenEstimate = await TokenEstimator.EstimateLlamaConversationTokens(conversation);
 
+        // PHASE 5: Create GitHub issue if any failures
+        int titleFailCount = CountArrayItems(titleFailuresJson);
+        int bodyFailCount  = CountArrayItems(bodyFailuresJson);
+
+        if (titleFailCount == 0 && bodyFailCount == 0)
+        {
+            logger.LogInformation("No failures detected; skipping issue creation phase.");
+            return string.Empty;
+        }
+
+        string failureIssueBody = BuildIssueBody(titleFailuresJson, bodyFailuresJson);
+
+        userPrompt.Clear();
+        userPrompt.AppendLine("CREATE_VALIDATION_FAILURE_ISSUE");
+        userPrompt.AppendLine("Make exactly one create_issue tool call.");
+        userPrompt.AppendLine("Use ONLY arguments: body, title and repo.");
+        userPrompt.AppendLine($"repo={RepoOwner}/{RepoName}");
+        userPrompt.AppendLine($"owner={RepoOwner}");
+        userPrompt.AppendLine("title=PR Checks Failed");
+        userPrompt.AppendLine("The body argument must include everything between the following tags - <<BODY_START>> <<BODY_END>> exactly as defined (the same as using @ before a string in c#)");
+        userPrompt.AppendLine($"<<BODY_START>>{failureIssueBody}<<BODY_END>>");
+        userPrompt.AppendLine($"Do NOT include the <<BODY_START>> or <<BODY_END>> tags in the actual body argument.");
+        userPrompt.AppendLine("The body MUST NOT contain any HTML elements or anything that could be construed as HTML.");
+        userPrompt.AppendLine("Do NOT call any tool more than once. Do not format or summarise.");
+
+        conversation.Add(new ChatMessage(ChatRole.User, userPrompt.ToString()));
+
+        string issueResponse = await GetResponse(conversation, allToolOptions);
+        conversation.Add(new ChatMessage(ChatRole.Assistant, issueResponse));
+
         // PRETTY consolidated JSON (set pretty:false for compact)
         string consolidated = BuildConsolidatedJson(
             pullRequestsJson,
             titleFailuresJson,
             bodyFailuresJson,
+            issueResponse,
             tokenEstimate,
             pretty: true);
 
         return consolidated;
     }
 
-    private string BuildConsolidatedJson(
-        string pullRequests,
-        string titleFailures,
-        string bodyFailures,
-        int tokens,
-        bool pretty = true)
+    private static string BuildIssueBody(string titleFailuresJson, string bodyFailuresJson)
     {
-        pullRequests = string.IsNullOrWhiteSpace(pullRequests) ? "[]" : pullRequests.Trim();
-        titleFailures = string.IsNullOrWhiteSpace(titleFailures) ? "[]" : titleFailures.Trim();
-        bodyFailures = string.IsNullOrWhiteSpace(bodyFailures) ? "[]" : bodyFailures.Trim();
+        StringBuilder sb = new StringBuilder("**Automated PR checks detected failures. Please address the following issues:**");
+
+        AppendFailures("Title Pattern Failures", titleFailuresJson, sb);
+        AppendFailures("Body Hyperlink Failures", bodyFailuresJson, sb);
+
+        sb.AppendLine("Please update affected pull requests to satisfy validation rules.");
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendFailures(string header, string json, StringBuilder sb)
+    {
+        int count = CountArrayItems(json);
+
+        if (count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine($"## {header} ({count})");
 
         try
         {
-            using (MemoryStream ms = new MemoryStream())
+            using JsonDocument doc = JsonDocument.Parse(json);
+            foreach (JsonElement el in doc.RootElement.EnumerateArray())
             {
-                using (Utf8JsonWriter writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = pretty }))
-                {
-                    writer.WriteStartObject();
-
-                    writer.WritePropertyName("Repository");
-                    writer.WriteStartObject();
-                    writer.WriteString("Owner", RepoOwner);
-                    writer.WriteString("Name", RepoName);
-                    writer.WriteEndObject();
-
-                    writer.WritePropertyName("PullRequests");
-
-                    using (JsonDocument prDoc = JsonDocument.Parse(pullRequests))
-                    {
-                        prDoc.RootElement.WriteTo(writer);
-                    }
-
-                    writer.WritePropertyName("TitlePatternFailures");
-
-                    using (JsonDocument titleDoc = JsonDocument.Parse(titleFailures))
-                    {
-                        titleDoc.RootElement.WriteTo(writer);
-                    }
-
-                    writer.WritePropertyName("BodyHyperlinkFailures");
-
-                    using (JsonDocument bodyDoc = JsonDocument.Parse(bodyFailures))
-                    {
-                        bodyDoc.RootElement.WriteTo(writer);
-                    }
-
-                    writer.WritePropertyName("Stats");
-                    writer.WriteStartObject();
-                    writer.WriteNumber("TokenEstimate", tokens);
-
-                    writer.WritePropertyName("PhaseFailures");
-                    writer.WriteStartObject();
-                    writer.WriteNumber("TitlePattern", CountArrayItems(titleFailures));
-                    writer.WriteNumber("BodyHyperlink", CountArrayItems(bodyFailures));
-                    writer.WriteEndObject(); // PhaseFailures
-
-                    writer.WriteEndObject(); // Stats
-
-                    writer.WriteEndObject(); // root
-                }
-
-                return Encoding.UTF8.GetString(ms.ToArray());
+                int pr = el.GetProperty("PullRequestNumber").GetInt32();
+                string reason = el.GetProperty("Reason").GetString() ?? "(no reason)";
+                sb.AppendLine($"- PR #{pr}: {reason}");
             }
         }
-        catch (Exception ex)
+        catch
         {
-            logger.LogWarning(ex, "Failed to pretty-build JSON; falling back to minimal JSON.");
-
-            // Fallback minimal (compact) JSON (corrected braces)
-            return $"{{\"Repository\":{{\"Owner\":\"{EscapeJson(RepoOwner)}\",\"Name\":\"{EscapeJson(RepoName)}\"}}," +
-                   $"\"PullRequests\":{pullRequests}," +
-                   $"\"TitlePatternFailures\":{titleFailures}," +
-                   $"\"BodyHyperlinkFailures\":{bodyFailures}," +
-                   $"\"Stats\":{{\"TokenEstimate\":{tokens},\"PhaseFailures\":{{\"TitlePattern\":{CountArrayItems(titleFailures)},\"BodyHyperlink\":{CountArrayItems(bodyFailures)}}}}}}}";
+            sb.AppendLine("(Failed to parse failure details)");
         }
     }
+
+    private string BuildConsolidatedJson(
+    string pullRequests,
+    string titleFailures,
+    string bodyFailures,
+    string issueResponse,
+    int tokens,
+    bool pretty = true)
+{
+    pullRequests = string.IsNullOrWhiteSpace(pullRequests) ? "[]" : pullRequests.Trim();
+    titleFailures = string.IsNullOrWhiteSpace(titleFailures) ? "[]" : titleFailures.Trim();
+    bodyFailures = string.IsNullOrWhiteSpace(bodyFailures) ? "[]" : bodyFailures.Trim();
+    issueResponse = string.IsNullOrWhiteSpace(issueResponse) ? "\"empty\"" : issueResponse.Trim();
+
+    try
+    {
+        using (MemoryStream ms = new MemoryStream())
+        {
+            using (Utf8JsonWriter writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = pretty }))
+            {
+                writer.WriteStartObject();
+
+                writer.WritePropertyName("Repository");
+                writer.WriteStartObject();
+                writer.WriteString("Owner", RepoOwner);
+                writer.WriteString("Name", RepoName);
+                writer.WriteEndObject();
+
+                writer.WritePropertyName("PullRequests");
+
+                using (JsonDocument prDoc = JsonDocument.Parse(pullRequests))
+                {
+                    prDoc.RootElement.WriteTo(writer);
+                }
+
+                writer.WritePropertyName("TitlePatternFailures");
+
+                using (JsonDocument titleDoc = JsonDocument.Parse(titleFailures))
+                {
+                    titleDoc.RootElement.WriteTo(writer);
+                }
+
+                writer.WritePropertyName("BodyHyperlinkFailures");
+
+                using (JsonDocument bodyDoc = JsonDocument.Parse(bodyFailures))
+                {
+                    bodyDoc.RootElement.WriteTo(writer);
+                }
+
+                writer.WritePropertyName("IssueCreationResponse");
+                writer.WriteStartObject();
+                writer.WriteString("IssueInformation", issueResponse);
+                writer.WriteEndObject();
+
+                writer.WritePropertyName("Stats");
+                writer.WriteStartObject();
+                writer.WriteNumber("TokenEstimate", tokens);
+
+                writer.WritePropertyName("PhaseFailures");
+                writer.WriteStartObject();
+                writer.WriteNumber("TitlePattern", CountArrayItems(titleFailures));
+                writer.WriteNumber("BodyHyperlink", CountArrayItems(bodyFailures));
+                writer.WriteEndObject(); // PhaseFailures
+
+                writer.WriteEndObject(); // Stats
+
+                writer.WriteEndObject(); // root
+            }
+
+            return Encoding.UTF8.GetString(ms.ToArray());
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Failed to pretty-build JSON; falling back to minimal JSON.");
+
+        // Fallback minimal (compact) JSON (corrected braces)
+        return $"{{\"Repository\":{{\"Owner\":\"{EscapeJson(RepoOwner)}\",\"Name\":\"{EscapeJson(RepoName)}\"}}," +
+               $"\"PullRequests\":{pullRequests}," +
+               $"\"TitlePatternFailures\":{titleFailures}," +
+               $"\"BodyHyperlinkFailures\":{bodyFailures}," +
+               $"\"Stats\":{{\"TokenEstimate\":{tokens},\"PhaseFailures\":{{\"TitlePattern\":{CountArrayItems(titleFailures)},\"BodyHyperlink\":{CountArrayItems(bodyFailures)}}}}}}}";
+    }
+}
 
     private static int CountArrayItems(string jsonArray)
     {
@@ -313,13 +388,29 @@ public class AIEngine(
 #pragma warning disable S3267
         await foreach (ChatResponseUpdate update in chatClient.GetStreamingResponseAsync(conversation, opts))
         {
-            sb.Append(update.Text);
-            Console.Write(update.Text);
+            if (!string.IsNullOrEmpty(update.Text))
+            {
+                sb.Append(update.Text);
+                Console.Write(update.Text);
+            }
         }
 #pragma warning restore S3267
         logger.LogDebug("\nCompleted streaming response");
 
         return sb.ToString().Trim();
+    }
+
+    private static string SafeSerialiseArgs(IReadOnlyDictionary<string, object?>? args)
+    {
+        if (args == null) return "<null>";
+        try
+        {
+            return JsonSerializer.Serialize(args);
+        }
+        catch
+        {
+            return "<unserializable>";
+        }
     }
 
     private static string ExtractTaggedJson(string raw)
